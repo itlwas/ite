@@ -10,40 +10,49 @@
 #include <io.h>
 #include <fcntl.h>
 #define PROMPT_MAX_LENGTH 4096
-#ifndef STDIN_FILENO
-#define STDIN_FILENO 0
-#endif
-#ifndef STDOUT_FILENO
-#define STDOUT_FILENO 1
-#endif
-#define CTRL_KEY(k) ((k)&0x1f)
 #define ITE_VERSION "0.0.1"
 #define ITE_TAB_STOP 8
 #define ITE_QUIT_TIMES 3
-enum editorKey { 
-    BACKSPACE = 127, 
-    ARROW_LEFT = 1000, 
-    ARROW_RIGHT, 
-    ARROW_UP, 
-    ARROW_DOWN, 
-    DEL_KEY, 
-    HOME_KEY, 
-    END_KEY, 
-    PAGE_UP, 
-    PAGE_DOWN, 
+#ifndef STDIN_FILENO
+    #define STDIN_FILENO 0
+#endif
+#ifndef STDOUT_FILENO
+    #define STDOUT_FILENO 1
+#endif
+#define CTRL_KEY(k) ((k) & 0x1F)
+enum editorKey {
+    BACKSPACE = 127,
+    ARROW_LEFT = 1000,
+    ARROW_RIGHT,
+    ARROW_UP,
+    ARROW_DOWN,
+    DEL_KEY,
+    HOME_KEY,
+    END_KEY,
+    PAGE_UP,
+    PAGE_DOWN,
     F2_KEY = 1010
 };
 typedef struct erow {
-    int index, size, rendered_size;
+    int index;
+    int size;
+    int rendered_size;
     char *characters;
     char *rendered_characters;
 } erow;
 struct editorConfig {
-    int file_position_x, file_position_y, screen_position_x;
-    int row_offset, column_offset, screen_rows, screen_columns;
-    int number_of_rows, dirty;
+    int file_position_x;
+    int file_position_y;
+    int screen_position_x;
+    int row_offset;
+    int column_offset;
+    int screen_rows;
+    int screen_columns;
+    int number_of_rows;
+    int dirty;
     erow *row;
-    char *filename, status_message[80];
+    char *filename;
+    char status_message[80];
     time_t status_message_time;
     int in_terminal_mode;
     char terminal_input[PROMPT_MAX_LENGTH];
@@ -420,51 +429,58 @@ int editorSave() {
     editorSetStatusMessage("%d lines written", E.number_of_rows);
     return 1;
 }
+static int last_find_match = -1;
+static int last_find_direction = 1;
 void editorFindCallback(char *query, int key) {
-    static int last_match = -1, direction = 1;
-    if (query[0] == '\0')
-        return;    
-    if (key == '\r' || key == '\x1b') { 
-        last_match = -1; 
-        direction = 1; 
-        return; 
-    } else if (key == ARROW_RIGHT || key == ARROW_DOWN) {
-        direction = 1;
-    } else if (key == ARROW_LEFT || key == ARROW_UP) {
-        direction = -1;
-    } else {
-        last_match = -1;
-        direction = 1;
+    if (!query || !*query) {
+        last_find_match = -1;
+        return;
     }
-    if (last_match == -1)
-        direction = 1;
-    int current = last_match;
-    for (int i = 0; i < E.number_of_rows; i++) {
-        current += direction;
-        if (current < 0)
-            current = E.number_of_rows - 1;
-        else if (current >= E.number_of_rows)
-            current = 0;
+    if (key == '\r' || key == '\x1b') {
+        last_find_match = -1;
+        last_find_direction = 1;
+        return;
+    }
+    if (key == ARROW_RIGHT || key == ARROW_DOWN)
+        last_find_direction = 1;
+    else if (key == ARROW_LEFT || key == ARROW_UP)
+        last_find_direction = -1;
+    else {
+        last_find_match = -1;
+        last_find_direction = 1;
+    }
+    if (last_find_match == -1)
+        last_find_direction = 1;
+    int current = last_find_match;
+    size_t qlen = strlen(query);
+    for (int i = 0; i < E.number_of_rows; ++i) {
+        current = (current + last_find_direction + E.number_of_rows) % E.number_of_rows;
         erow *row = &E.row[current];
         char *match = strstr(row->rendered_characters, query);
         if (match) {
-            last_match = current;
+            last_find_match = current;
             E.file_position_y = current;
-            E.file_position_x = editorRowScreenPositionXToFilePositionX(row, (int)(match - row->rendered_characters));
-            E.row_offset = current;
+            E.file_position_x = editorRowScreenPositionXToFilePositionX(row, match - row->rendered_characters);
+            E.row_offset = E.number_of_rows;
+            memset(match, 'X', qlen);
+            editorUpdateRow(row);
             break;
         }
     }
 }
 void editorFind() {
-    int saved_x = E.file_position_x, saved_y = E.file_position_y, saved_col = E.column_offset, saved_row = E.row_offset;
-    char *query = editorPrompt("Search: %s (ESC/Arrows/Enter)", editorFindCallback);
-    if (query) free(query);
+    int saved_file_position_x = E.file_position_x;
+    int saved_file_position_y = E.file_position_y;
+    int saved_row_offset = E.row_offset;
+    int saved_col_offset = E.column_offset;
+    char *query = editorPrompt("Search: %s", editorFindCallback);
+    if (query)
+        free(query);
     else {
-        E.file_position_x = saved_x;
-        E.file_position_y = saved_y;
-        E.column_offset = saved_col;
-        E.row_offset = saved_row;
+        E.file_position_x = saved_file_position_x;
+        E.file_position_y = saved_file_position_y;
+        E.row_offset = saved_row_offset;
+        E.column_offset = saved_col_offset;
     }
 }
 struct abuf {
