@@ -479,10 +479,6 @@ void editorDrawRows(struct abuf *ab) {
     while (max_lines >= 10) { max_lines /= 10; digits++; }
     int ln_width = digits + 3;
     int content_width = E.screen_columns - ln_width;
-
-    // Перед тем как рисовать, скроем курсор
-    abAppend(ab, "\x1b[?25l", 6);
-
     for (int y = 0; y < E.screen_rows; y++) {
         int filerow = y + E.row_offset;
         char buf[32];
@@ -509,9 +505,6 @@ void editorDrawRows(struct abuf *ab) {
         abAppend(ab, "\x1b[K", 3);
         abAppend(ab, "\r\n", 2);
     }
-
-    // После рисования всех строк, восстанавливаем курсор
-    abAppend(ab, "\x1b[?25h", 6);
 }
 void editorDrawStatusBar(struct abuf *ab) {
     abAppend(ab, "\x1b[7m", 4);
@@ -545,23 +538,25 @@ void editorRefreshScreen() {
     editorDrawRows(&ab);
     editorDrawStatusBar(&ab);
     editorDrawMessageBar(&ab);
-    int digits = 1;
-    int max_lines = (E.number_of_rows > 0 ? E.number_of_rows : 1);
-    while (max_lines >= 10) { max_lines /= 10; digits++; }
-    int ln_width = digits + 3;
-    char buf[32];
-    int cursor_y = E.file_position_y - E.row_offset;
-    int cursor_x = ln_width + (E.screen_position_x - E.column_offset);
-    if (E.file_position_y >= E.number_of_rows) {
-        cursor_y = E.number_of_rows > 0 ? E.number_of_rows - E.row_offset : 0;
-        cursor_x = ln_width;
+    if (E.number_of_rows > 0) {
+        int digits = 1;
+        int max_lines = E.number_of_rows;
+        while (max_lines >= 10) { max_lines /= 10; digits++; }
+        int ln_width = digits + 3;
+        char buf[32];
+        int cursor_y = E.file_position_y - E.row_offset;
+        int cursor_x = ln_width + (E.screen_position_x - E.column_offset);
+        if (E.file_position_y >= E.number_of_rows) {
+            cursor_y = E.number_of_rows - E.row_offset;
+            cursor_x = ln_width;
+        }
+        if (cursor_y >= E.screen_rows) cursor_y = E.screen_rows - 1;
+        if (cursor_y < 0) cursor_y = 0;
+        if (cursor_x < ln_width) cursor_x = ln_width;
+        snprintf(buf, sizeof(buf), "\x1b[%d;%dH", cursor_y + 1, cursor_x + 1);
+        abAppend(&ab, buf, (int)strlen(buf));
+        abAppend(&ab, "\x1b[?25h", 6);
     }
-    if (cursor_y >= E.screen_rows) cursor_y = E.screen_rows - 1;
-    if (cursor_y < 0) cursor_y = 0;
-    if (cursor_x < ln_width) cursor_x = ln_width;
-    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", cursor_y + 1, cursor_x + 1);
-    abAppend(&ab, buf, (int)strlen(buf));
-    abAppend(&ab, "\x1b[?25h", 6);
     _write(STDOUT_FILENO, ab.b, ab.len);
     abFree(&ab);
 }
