@@ -207,13 +207,6 @@ void editorRowAppendString(erow *row, char *s, size_t len) {
     E.dirty++;
 }
 void editorInsertNewline() {
-    if (E.file_position_y == E.number_of_rows) {
-        for (int i = 0; i <= E.file_position_y; i++) {
-            if (i >= E.number_of_rows) {
-                editorInsertRow(i, "", 0);
-            }
-        }
-    }
     if (E.file_position_x == 0) {
         editorInsertRow(E.file_position_y, "", 0);
     } else {
@@ -498,7 +491,7 @@ void editorDrawRows(struct abuf *ab) {
             char *c = &E.row[filerow].rendered_characters[E.column_offset];
             abAppend(ab, c, len);
         } else {
-            snprintf(buf, sizeof(buf), "%*s   ", digits, "");
+            snprintf(buf, sizeof(buf), "\x1b[38;5;244m%*s\x1b[39m   ", digits, "~");
             abAppend(ab, buf, (int)strlen(buf));
             if (E.number_of_rows == 0 && y == E.screen_rows / 3) {
                 char welcome[80];
@@ -507,8 +500,6 @@ void editorDrawRows(struct abuf *ab) {
                 int padding = (content_width - welcomelen) / 2;
                 for (int i = 0; i < padding; i++) abAppend(ab, " ", 1);
                 abAppend(ab, welcome, welcomelen);
-            } else {
-                abAppend(ab, "~", 1);
             }
         }
         abAppend(ab, "\x1b[K", 3);
@@ -552,7 +543,16 @@ void editorRefreshScreen() {
     while (max_lines >= 10) { max_lines /= 10; digits++; }
     int ln_width = digits + 3;
     char buf[32];
-    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.file_position_y - E.row_offset) + 1, ln_width + (E.screen_position_x - E.column_offset) + 1);
+    int cursor_y = E.file_position_y - E.row_offset;
+    int cursor_x = ln_width + (E.screen_position_x - E.column_offset);
+    if (E.file_position_y >= E.number_of_rows) {
+        cursor_y = E.number_of_rows > 0 ? E.number_of_rows - E.row_offset : 0;
+        cursor_x = ln_width;
+    }
+    if (cursor_y >= E.screen_rows) cursor_y = E.screen_rows - 1;
+    if (cursor_y < 0) cursor_y = 0;
+    if (cursor_x < ln_width) cursor_x = ln_width;
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", cursor_y + 1, cursor_x + 1);
     abAppend(&ab, buf, (int)strlen(buf));
     abAppend(&ab, "\x1b[?25h", 6);
     _write(STDOUT_FILENO, ab.b, ab.len);
@@ -659,15 +659,23 @@ void editorDelCharAtCursor() {
 }
 void editorProcessKeypress() {
     static int quit_times = ITE_QUIT_TIMES;
-    int c = editorReadKey();
-    if (E.file_position_y >= E.number_of_rows) {
-        for (int i = E.number_of_rows; i <= E.file_position_y; i++) {
-            editorInsertRow(i, "", 0);
-        }
-    }
+    int c = editorReadKey(); 
     switch (c) {
         case '\r':
-            editorInsertNewline();
+            if (E.file_position_y >= E.number_of_rows) {
+                if (E.number_of_rows == 0) {
+                    editorInsertRow(0, "", 0);
+                    E.file_position_y = 0;
+                    E.file_position_x = 0;
+                } else {
+                    for (int i = E.number_of_rows; i <= E.file_position_y; i++) {
+                        editorInsertRow(i, "", 0);
+                    }
+                    editorInsertNewline();
+                }
+            } else {
+                editorInsertNewline();
+            }
             break;
         case CTRL_KEY('q'):
             if (E.dirty && quit_times-- > 0) {
@@ -709,6 +717,11 @@ void editorProcessKeypress() {
         case '\x1b':
             break;
         default:
+            if (E.file_position_y >= E.number_of_rows) {
+                for (int i = E.number_of_rows; i <= E.file_position_y; i++) {
+                    editorInsertRow(i, "", 0);
+                }
+            }
             editorInsertChar(c);
             break;
     }
