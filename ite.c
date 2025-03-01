@@ -479,6 +479,10 @@ void editorDrawRows(struct abuf *ab) {
     while (max_lines >= 10) { max_lines /= 10; digits++; }
     int ln_width = digits + 3;
     int content_width = E.screen_columns - ln_width;
+
+    // Перед тем как рисовать, скроем курсор
+    abAppend(ab, "\x1b[?25l", 6);
+
     for (int y = 0; y < E.screen_rows; y++) {
         int filerow = y + E.row_offset;
         char buf[32];
@@ -505,6 +509,9 @@ void editorDrawRows(struct abuf *ab) {
         abAppend(ab, "\x1b[K", 3);
         abAppend(ab, "\r\n", 2);
     }
+
+    // После рисования всех строк, восстанавливаем курсор
+    abAppend(ab, "\x1b[?25h", 6);
 }
 void editorDrawStatusBar(struct abuf *ab) {
     abAppend(ab, "\x1b[7m", 4);
