@@ -505,16 +505,17 @@ void editorDrawRows(struct abuf *ab) {
 }
 void editorDrawStatusBar(struct abuf *ab) {
     abAppend(ab, "\x1b[7m", 4);
-    char left[80], right[80], status[160];
-    int len_left = snprintf(left, sizeof(left), "%.20s - %d lines%s", E.filename ? E.filename : "[No Name]", E.number_of_rows, E.dirty ? " (modified)" : "");
-    int cur_line = E.file_position_y < E.number_of_rows ? E.file_position_y + 1 : E.number_of_rows;
+    char left[100], status[200];
+    char *fname = E.filename ? E.filename : "No name";
+    int cur_line = (E.file_position_y < E.number_of_rows ? E.file_position_y + 1 : E.number_of_rows);
     int cur_col = E.file_position_x + 1;
-    int percent = E.number_of_rows ? (E.file_position_y * 100 / E.number_of_rows) : 100;
-    int len_right = snprintf(right, sizeof(right), "Ln %d, Col %d | %d%%", cur_line, cur_col, percent);
-    int filler = E.screen_columns - (len_left + len_right);
-    if (filler < 0) filler = 0;
-    int n = snprintf(status, sizeof(status), "%s%*s%s", left, filler, "", right);
-    if (n > E.screen_columns) n = E.screen_columns;
+    int len_left = snprintf(left, sizeof(left), "%.30s%s (%d,%d)", fname, E.dirty ? " +" : "", cur_line, cur_col);
+    int filler = E.screen_columns - len_left;
+    if (filler < 0)
+        filler = 0;
+    int n = snprintf(status, sizeof(status), "%s%*s", left, filler, "");
+    if (n > E.screen_columns)
+        n = E.screen_columns;
     abAppend(ab, status, n);
     abAppend(ab, "\x1b[m", 3);
     abAppend(ab, "\r\n", 2);
