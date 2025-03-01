@@ -19,7 +19,19 @@
 #define ITE_VERSION "0.0.1"
 #define ITE_TAB_STOP 8
 #define ITE_QUIT_TIMES 3
-enum editorKey { BACKSPACE = 127, ARROW_LEFT = 1000, ARROW_RIGHT, ARROW_UP, ARROW_DOWN, DEL_KEY, HOME_KEY, END_KEY, PAGE_UP, PAGE_DOWN };
+enum editorKey { 
+    BACKSPACE = 127, 
+    ARROW_LEFT = 1000, 
+    ARROW_RIGHT, 
+    ARROW_UP, 
+    ARROW_DOWN, 
+    DEL_KEY, 
+    HOME_KEY, 
+    END_KEY, 
+    PAGE_UP, 
+    PAGE_DOWN, 
+    F2_KEY = 1010
+};
 typedef struct erow {
     int index, size, rendered_size;
     char *characters;
@@ -35,6 +47,7 @@ struct editorConfig {
 } E;
 void editorSetStatusMessage(const char *fmt, ...);
 void editorRefreshScreen();
+void editorQuit();
 char *editorPrompt(char *prompt, void (*callback)(char *, int));
 static DWORD orig_mode_in = 0, orig_mode_out = 0;
 void die(const char *s) {
@@ -70,6 +83,7 @@ int editorReadKey() {
             case 75: return ARROW_LEFT;
             case 77: return ARROW_RIGHT;
             case 83: return DEL_KEY;
+            case 60: return F2_KEY;
             default: return c;
         }
     }
@@ -344,37 +358,42 @@ void editorOpen(char *filename) {
     CloseHandle(hFile);
     E.dirty = 0;
 }
-void editorSave() {
-    if (!E.filename) {
-        E.filename = editorPrompt("File: %s", NULL);
-        if (!E.filename) {
-            editorSetStatusMessage("Save aborted");
-            return;
-        }
+int editorConfirm(const char *prompt, char default_yes) {
+    editorSetStatusMessage("%s", prompt);
+    editorRefreshScreen();
+    int c = editorReadKey();
+    editorSetStatusMessage("");
+    return default_yes ? (c == '\r' || tolower(c) == 'y') : (tolower(c) == 'y');
+}
+int editorSave() {
+    if (!E.filename && !(E.filename = editorPrompt("File: %s", NULL))) {
+        editorSetStatusMessage("Save aborted");
+        return 0;
     }
-    HANDLE hFile = CreateFile(E.filename, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
-                              FILE_ATTRIBUTE_NORMAL, NULL);
+    if (GetFileAttributes(E.filename) != INVALID_FILE_ATTRIBUTES && !editorConfirm("File already exists. Overwrite? (y/N)", 0)) {
+        editorSetStatusMessage("Save cancelled");
+        return 0;
+    }
+    HANDLE hFile = CreateFile(E.filename, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE) {
         editorSetStatusMessage("Save error: %lu", GetLastError());
-        return;
+        return 0;
     }
-    size_t chunkSize = 64 * 1024;
+    size_t chunkSize = 64 * 1024, bufferOffset = 0;
     char *buffer = malloc(chunkSize);
     if (!buffer) {
         CloseHandle(hFile);
         editorSetStatusMessage("Save error: Memory allocation failure");
-        return;
+        return 0;
     }
-    size_t bufferOffset = 0;
     DWORD bytesWritten;
     for (int j = 0; j < E.number_of_rows; j++) {
         if (bufferOffset + E.row[j].size + 1 >= chunkSize) {
-            if (!WriteFile(hFile, buffer, (DWORD)bufferOffset, &bytesWritten, NULL) ||
-                bytesWritten != bufferOffset) {
+            if (!WriteFile(hFile, buffer, bufferOffset, &bytesWritten, NULL) || bytesWritten != bufferOffset) {
                 CloseHandle(hFile);
                 free(buffer);
                 editorSetStatusMessage("Save error: %lu", GetLastError());
-                return;
+                return 0;
             }
             bufferOffset = 0;
         }
@@ -382,19 +401,17 @@ void editorSave() {
         bufferOffset += E.row[j].size;
         buffer[bufferOffset++] = '\n';
     }
-    if (bufferOffset > 0) {
-        if (!WriteFile(hFile, buffer, (DWORD)bufferOffset, &bytesWritten, NULL) ||
-            bytesWritten != bufferOffset) {
-            CloseHandle(hFile);
-            free(buffer);
-            editorSetStatusMessage("Save error: %lu", GetLastError());
-            return;
-        }
+    if (bufferOffset && (!WriteFile(hFile, buffer, bufferOffset, &bytesWritten, NULL) || bytesWritten != bufferOffset)) {
+        CloseHandle(hFile);
+        free(buffer);
+        editorSetStatusMessage("Save error: %lu", GetLastError());
+        return 0;
     }
     free(buffer);
     CloseHandle(hFile);
     E.dirty = 0;
     editorSetStatusMessage("%d lines written", E.number_of_rows);
+    return 1;
 }
 void editorFindCallback(char *query, int key) {
     static int last_match = -1, direction = 1;
@@ -659,9 +676,27 @@ void editorDelCharAtCursor() {
     }
     E.dirty++;
 }
+void editorQuit() {
+    if (!E.dirty || (E.filename == NULL && !E.number_of_rows)) {
+        exit(0);
+    }
+    if (E.filename == NULL) {
+        for (int i = 0; i < E.number_of_rows; i++) {
+            if (E.row[i].size) {
+                goto ask;
+            }
+        }
+        exit(0);
+    }
+ask:
+    if (editorConfirm("Save changes? (Y/n)", 1)) {
+        if (editorSave()) exit(0);
+    } else {
+        exit(0);
+    }
+}
 void editorProcessKeypress() {
-    static int quit_times = ITE_QUIT_TIMES;
-    int c = editorReadKey(); 
+    int c = editorReadKey();
     switch (c) {
         case '\r':
             if (E.file_position_y >= E.number_of_rows) {
@@ -680,12 +715,11 @@ void editorProcessKeypress() {
             }
             break;
         case CTRL_KEY('q'):
-            if (E.dirty && quit_times-- > 0) {
-                editorSetStatusMessage("Unsaved changes. Press Ctrl-Q %d times to exit.", quit_times + 1);
-                return;
-            }
-            exit(0);
+        case '\x1b':
+            editorQuit();
+            break;
         case CTRL_KEY('s'):
+        case F2_KEY:
             editorSave();
             break;
         case HOME_KEY:
@@ -704,19 +738,17 @@ void editorProcessKeypress() {
         case DEL_KEY:
             editorDelCharAtCursor();
             break;
-        case PAGE_UP: case PAGE_DOWN: {
+        case PAGE_UP: case PAGE_DOWN:
             E.file_position_y = (c == PAGE_UP) ? E.row_offset : E.row_offset + E.screen_rows - 1;
             if (E.file_position_y > E.number_of_rows)
                 E.file_position_y = E.number_of_rows;
             for (int i = E.screen_rows; i--; )
                 editorMoveCursor(c == PAGE_UP ? ARROW_UP : ARROW_DOWN);
             break;
-        }
         case ARROW_UP: case ARROW_DOWN: case ARROW_LEFT: case ARROW_RIGHT:
             editorMoveCursor(c);
             break;
         case CTRL_KEY('l'):
-        case '\x1b':
             break;
         default:
             if (E.file_position_y >= E.number_of_rows) {
@@ -727,7 +759,6 @@ void editorProcessKeypress() {
             editorInsertChar(c);
             break;
     }
-    quit_times = ITE_QUIT_TIMES;
 }
 void initEditor() {
     E.file_position_x = E.file_position_y = E.screen_position_x = E.row_offset = E.column_offset = 0;
