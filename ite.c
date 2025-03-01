@@ -184,8 +184,13 @@ void editorRowDelChar(erow *row, int at) {
     E.dirty++;
 }
 void editorInsertChar(int c) {
-    if (E.file_position_y == E.number_of_rows)
-        editorInsertRow(E.number_of_rows, "", 0);
+    if (E.file_position_y == E.number_of_rows) {
+        for (int i = 0; i <= E.file_position_y; i++) {
+            if (i >= E.number_of_rows) {
+                editorInsertRow(i, "", 0);
+            }
+        }
+    }
     editorRowInsertChar(&E.row[E.file_position_y], E.file_position_x, c);
     E.file_position_x++;
 }
@@ -202,9 +207,16 @@ void editorRowAppendString(erow *row, char *s, size_t len) {
     E.dirty++;
 }
 void editorInsertNewline() {
-    if (E.file_position_x == 0)
+    if (E.file_position_y == E.number_of_rows) {
+        for (int i = 0; i <= E.file_position_y; i++) {
+            if (i >= E.number_of_rows) {
+                editorInsertRow(i, "", 0);
+            }
+        }
+    }
+    if (E.file_position_x == 0) {
         editorInsertRow(E.file_position_y, "", 0);
-    else {
+    } else {
         erow *row = &E.row[E.file_position_y];
         editorInsertRow(E.file_position_y + 1, &row->characters[E.file_position_x], row->size - E.file_position_x);
         row = &E.row[E.file_position_y];
@@ -611,6 +623,9 @@ void editorMoveCursor(int key) {
             if (row && E.file_position_x < row->size)
                 E.file_position_x++;
             else if (row && E.file_position_x == row->size) {
+                if (E.file_position_y + 1 > E.number_of_rows) {
+                    editorInsertRow(E.number_of_rows, "", 0);
+                }
                 E.file_position_y++;
                 E.file_position_x = 0;
             }
@@ -619,7 +634,12 @@ void editorMoveCursor(int key) {
             if (E.file_position_y) E.file_position_y--;
             break;
         case ARROW_DOWN:
-            if (E.file_position_y < E.number_of_rows) E.file_position_y++;
+            if (E.file_position_y < E.number_of_rows - 1) {
+                E.file_position_y++;
+            } else if (E.file_position_y == E.number_of_rows - 1) {
+                editorInsertRow(E.number_of_rows, "", 0);
+                E.file_position_y++;
+            }
             break;
     }
     row = (E.file_position_y >= E.number_of_rows) ? NULL : &E.row[E.file_position_y];
@@ -640,6 +660,11 @@ void editorDelCharAtCursor() {
 void editorProcessKeypress() {
     static int quit_times = ITE_QUIT_TIMES;
     int c = editorReadKey();
+    if (E.file_position_y >= E.number_of_rows) {
+        for (int i = E.number_of_rows; i <= E.file_position_y; i++) {
+            editorInsertRow(i, "", 0);
+        }
+    }
     switch (c) {
         case '\r':
             editorInsertNewline();
