@@ -14,10 +14,10 @@
 #define ITE_TAB_STOP 8
 #define ITE_QUIT_TIMES 3
 #ifndef STDIN_FILENO
-    #define STDIN_FILENO 0
+#define STDIN_FILENO 0
 #endif
 #ifndef STDOUT_FILENO
-    #define STDOUT_FILENO 1
+#define STDOUT_FILENO 1
 #endif
 #define CTRL_KEY(k) ((k) & 0x1F)
 enum editorKey {
@@ -71,6 +71,11 @@ void die(const char *s) {
     _write(STDOUT_FILENO, clear, (unsigned int)strlen(clear));
     perror(s);
     exit(1);
+}
+void *safeMalloc(size_t size) {
+    void *ptr = malloc(size);
+    if (!ptr) die("Memory allocation failure");
+    return ptr;
 }
 void disableRawMode() {
     _write(STDOUT_FILENO, "\x1b[?1049l", 8);
@@ -139,10 +144,7 @@ void editorUpdateRow(erow *row) {
             tabs++;
     free(row->rendered_characters);
     size_t new_size = row->size + tabs * (ITE_TAB_STOP - 1) + 1;
-    row->rendered_characters = malloc(new_size);
-    if (!row->rendered_characters) {
-        die("Memory allocation failure in editorUpdateRow");
-    }
+    row->rendered_characters = safeMalloc(new_size);
     int idx = 0;
     for (int j = 0; j < row->size; j++) {
         if (row->characters[j] == '\t') {
@@ -159,19 +161,14 @@ void editorUpdateRow(erow *row) {
 void editorInsertRow(int at, char *s, size_t len) {
     if (at < 0 || at > E.number_of_rows) return;
     erow *new_rows = realloc(E.row, sizeof(erow) * (E.number_of_rows + 1));
-    if (!new_rows) {
-        die("Memory allocation failure in editorInsertRow");
-    }
+    if (!new_rows) die("Memory allocation failure in editorInsertRow");
     E.row = new_rows;
     memmove(&E.row[at + 1], &E.row[at], sizeof(erow) * (E.number_of_rows - at));
     for (int j = at + 1; j <= E.number_of_rows; j++)
         E.row[j].index++;
     E.row[at].index = at;
     E.row[at].size = (int)len;
-    E.row[at].characters = malloc(len + 1);
-    if (!E.row[at].characters) {
-        die("Memory allocation failure in editorInsertRow for characters");
-    }
+    E.row[at].characters = safeMalloc(len + 1);
     memcpy(E.row[at].characters, s, len);
     E.row[at].characters[len] = '\0';
     E.row[at].rendered_size = 0;
@@ -196,9 +193,7 @@ void editorDelRow(int at) {
 void editorRowInsertChar(erow *row, int at, int c) {
     if (at < 0 || at > row->size) at = row->size;
     char *new_chars = realloc(row->characters, row->size + 2);
-    if (!new_chars) {
-        die("Memory allocation failure in editorRowInsertChar");
-    }
+    if (!new_chars) die("Memory allocation failure in editorRowInsertChar");
     row->characters = new_chars;
     memmove(&row->characters[at + 1], &row->characters[at], row->size - at + 1);
     row->size++;
@@ -226,9 +221,7 @@ void editorInsertChar(int c) {
 }
 void editorRowAppendString(erow *row, char *s, size_t len) {
     char *new_chars = realloc(row->characters, row->size + len + 1);
-    if (!new_chars) {
-        die("Memory allocation failure in editorRowAppendString");
-    }
+    if (!new_chars) die("Memory allocation failure in editorRowAppendString");
     row->characters = new_chars;
     memcpy(&row->characters[row->size], s, len);
     row->size += (int)len;
@@ -301,10 +294,7 @@ char *editorRowsToString(int *buflen) {
     for (int j = 0; j < E.number_of_rows; j++)
         totlen += E.row[j].size + 1;
     *buflen = totlen;
-    char *buf = malloc(totlen);
-    if (!buf) {
-        die("Memory allocation failure in editorRowsToString");
-    }
+    char *buf = safeMalloc(totlen);
     char *p = buf;
     for (int j = 0; j < E.number_of_rows; j++) {
         memcpy(p, E.row[j].characters, E.row[j].size);
@@ -316,7 +306,7 @@ char *editorRowsToString(int *buflen) {
 }
 void editorOpen(char *filename) {
     HANDLE hFile = CreateFile(filename, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (hFile == INVALID_HANDLE_VALUE) { die("CreateFile"); }
+    if (hFile == INVALID_HANDLE_VALUE) die("CreateFile");
     LARGE_INTEGER fileSize;
     if (!GetFileSizeEx(hFile, &fileSize)) { CloseHandle(hFile); die("GetFileSizeEx"); }
     if (fileSize.QuadPart == 0) {
@@ -332,8 +322,7 @@ void editorOpen(char *filename) {
     if (!fileData) { CloseHandle(hMapping); CloseHandle(hFile); die("MapViewOfFile"); }
     typedef struct { const char *line_start; size_t line_length; } line_info;
     size_t line_count = 0, line_capacity = 1024;
-    line_info *lines = malloc(line_capacity * sizeof(line_info));
-    if (!lines) { UnmapViewOfFile(fileData); CloseHandle(hMapping); CloseHandle(hFile); die("Memory allocation failure for line info"); }
+    line_info *lines = safeMalloc(line_capacity * sizeof(line_info));
     const char *p = fileData, *end = fileData + fileSize.QuadPart;
     while (p < end) {
         const char *newline = memchr(p, '\n', end - p);
@@ -352,16 +341,14 @@ void editorOpen(char *filename) {
         p = newline ? newline + 1 : end;
     }
     E.number_of_rows = (int)line_count;
-    E.row = malloc(sizeof(erow) * E.number_of_rows);
-    if (!E.row) { free(lines); UnmapViewOfFile(fileData); CloseHandle(hMapping); CloseHandle(hFile); die("Memory allocation failure for editor rows"); }
+    E.row = safeMalloc(sizeof(erow) * E.number_of_rows);
     free(E.filename);
     E.filename = strdup(filename);
     if (!E.filename) { free(lines); UnmapViewOfFile(fileData); CloseHandle(hMapping); CloseHandle(hFile); die("Memory allocation failure for filename"); }
     for (size_t i = 0; i < line_count; i++) {
         E.row[i].index = (int)i;
         E.row[i].size = (int)lines[i].line_length;
-        E.row[i].characters = malloc(lines[i].line_length + 1);
-        if (!E.row[i].characters) { die("Memory allocation failure for row characters"); }
+        E.row[i].characters = safeMalloc(lines[i].line_length + 1);
         memcpy(E.row[i].characters, lines[i].line_start, lines[i].line_length);
         E.row[i].characters[lines[i].line_length] = '\0';
         E.row[i].rendered_characters = NULL;
@@ -654,8 +641,7 @@ void editorSetStatusMessage(const char *fmt, ...) {
 #define PROMPT_MAX_LENGTH 4096
 char *editorPrompt(char *prompt, void (*callback)(char *, int)) {
     size_t bufsize = 128, buflen = 0;
-    char *buf = malloc(bufsize);
-    if (!buf) return NULL;
+    char *buf = safeMalloc(bufsize);
     buf[0] = '\0';
     while (1) {
         editorSetStatusMessage(prompt, buf);
@@ -679,10 +665,7 @@ char *editorPrompt(char *prompt, void (*callback)(char *, int)) {
                 if (buflen == bufsize - 1) {
                     bufsize *= 2;
                     char *temp = realloc(buf, bufsize);
-                    if (!temp) {
-                        free(buf);
-                        die("Memory allocation failure in editorPrompt");
-                    }
+                    if (!temp) { free(buf); die("Memory allocation failure in editorPrompt"); }
                     buf = temp;
                 }
                 buf[buflen++] = c;
