@@ -60,6 +60,9 @@ struct editorConfig {
     int terminal_output_mode;
     char **terminal_output_lines;
     int terminal_output_num_lines;
+    char **terminal_history;
+    int terminal_history_num_lines;
+    int terminal_height;
     int screen_dirty;
     int cursor_moved;
 } E;
@@ -141,19 +144,22 @@ int editorRowScreenPositionXToFilePositionX(erow *row, int screen_x) {
     return file_x;
 }
 void editorUpdateRow(erow *row) {
-    int tabs = 0, j;
+    int screen_x = 0, j;
     for (j = 0; j < row->size; j++)
-        if (row->characters[j] == '\t') tabs++;
-    size_t new_size = row->size + tabs * (ITE_TAB_STOP - 1) + 1;
+        screen_x += row->characters[j] == '\t' ? ITE_TAB_STOP - (screen_x % ITE_TAB_STOP) : 1;
     free(row->rendered_characters);
-    row->rendered_characters = safeMalloc(new_size);
+    row->rendered_characters = safeMalloc(screen_x + 1);
     int idx = 0;
+    screen_x = 0;
     for (j = 0; j < row->size; j++) {
         if (row->characters[j] == '\t') {
-            memset(row->rendered_characters + idx, ' ', ITE_TAB_STOP);
-            idx += ITE_TAB_STOP;
+            int spaces = ITE_TAB_STOP - (screen_x % ITE_TAB_STOP);
+            memset(row->rendered_characters + idx, ' ', spaces);
+            idx += spaces;
+            screen_x += spaces;
         } else {
             row->rendered_characters[idx++] = row->characters[j];
+            screen_x++;
         }
     }
     row->rendered_characters[idx] = '\0';
@@ -161,12 +167,15 @@ void editorUpdateRow(erow *row) {
 }
 void editorInsertRow(int at, char *s, size_t len) {
     if (at < 0 || at > E.number_of_rows) return;
-    erow *new_rows = realloc(E.row, sizeof(erow) * (E.number_of_rows + 1));
-    if (!new_rows) die("Memory allocation failure in editorInsertRow");
-    E.row = new_rows;
-    if (at < E.number_of_rows) {
-        memmove(&E.row[at + 1], &E.row[at], sizeof(erow) * (E.number_of_rows - at));
+    static int capacity = 0;
+    if (E.number_of_rows + 1 > capacity) {
+        capacity = capacity ? capacity * 2 : 16;
+        erow *new_rows = realloc(E.row, sizeof(erow) * capacity);
+        if (!new_rows) die("Memory allocation failure in editorInsertRow");
+        E.row = new_rows;
     }
+    if (at < E.number_of_rows)
+        memmove(&E.row[at + 1], &E.row[at], sizeof(erow) * (E.number_of_rows - at));
     erow *row = &E.row[at];
     row->index = at;
     row->size = len;
@@ -179,7 +188,6 @@ void editorInsertRow(int at, char *s, size_t len) {
     editorUpdateRow(row);
     E.number_of_rows++;
     E.dirty++;
-    for (int j = at + 1; j < E.number_of_rows; j++) E.row[j].index = j;
 }
 void editorFreeRow(erow *row) {
     free(row->rendered_characters);
@@ -196,9 +204,13 @@ void editorDelRow(int at) {
 }
 void editorRowInsertChar(erow *row, int at, int c) {
     if (at < 0 || at > row->size) at = row->size;
-    char *new_chars = realloc(row->characters, row->size + 2);
-    if (!new_chars) die("Memory allocation failure in editorRowInsertChar");
-    row->characters = new_chars;
+    static int capacity = 0;
+    if (row->size + 2 > capacity) {
+        capacity = capacity ? capacity * 2 : 16;
+        char *new_chars = realloc(row->characters, capacity);
+        if (!new_chars) die("Memory allocation failure in editorRowInsertChar");
+        row->characters = new_chars;
+    }
     memmove(&row->characters[at + 1], &row->characters[at], row->size - at + 1);
     row->size++;
     row->characters[at] = c;
@@ -339,20 +351,22 @@ char *editorRowsToString(int *buflen) {
     return buf;
 }
 void editorOpen(char *filename) {
-    FILE *fp = fopen(filename, "r");
-    if (!fp) die("Cannot open file");
     free(E.filename);
     E.filename = strdup(filename);
     if (!E.filename) die("Memory allocation failure for filename");
-    char *line = NULL;
-    size_t linecap = 0;
-    ssize_t linelen;
-    while ((linelen = win_getline(&line, &linecap, fp)) != -1) {
-        while (linelen > 0 && (line[linelen - 1] == '\n' || line[linelen - 1] == '\r')) linelen--;
-        editorInsertRow(E.number_of_rows, line, linelen);
+    if (_access(filename, 0) == 0) {
+        FILE *fp = fopen(filename, "r");
+        if (!fp) die("Cannot open file");
+        char *line = NULL;
+        size_t linecap = 0;
+        ssize_t linelen;
+        while ((linelen = win_getline(&line, &linecap, fp)) != -1) {
+            while (linelen > 0 && (line[linelen - 1] == '\n' || line[linelen - 1] == '\r')) linelen--;
+            editorInsertRow(E.number_of_rows, line, linelen);
+        }
+        free(line);
+        fclose(fp);
     }
-    free(line);
-    fclose(fp);
     E.dirty = 0;
 }
 int editorConfirm(const char *prompt, char default_yes) {
@@ -666,6 +680,7 @@ void editorMoveCursor(int key) {
             else if (row && E.file_position_x == row->size) {
                 if (E.file_position_y + 1 > E.number_of_rows) {
                     editorInsertRow(E.number_of_rows, "", 0);
+                    E.screen_dirty = 1;
                 }
                 E.file_position_y++;
                 E.file_position_x = 0;
@@ -680,6 +695,7 @@ void editorMoveCursor(int key) {
             } else if (E.file_position_y == E.number_of_rows - 1) {
                 editorInsertRow(E.number_of_rows, "", 0);
                 E.file_position_y++;
+                E.screen_dirty = 1;
             }
             break;
     }
@@ -718,69 +734,57 @@ ask:
     }
 }
 void editorExecuteTerminalCommand() {
-    if (strncmp(E.terminal_input, "run ", 4) == 0) {
-        char *command = E.terminal_input + 4;
-        FILE *fp = _popen(command, "r");
-        if (fp == NULL) {
-            editorSetStatusMessage("Failed to execute command");
-            return;
-        }
-        int num_lines = 0;
-        int capacity = 10;
-        char **lines = malloc(sizeof(char*) * capacity);
-        if (!lines) die("Memory allocation failure");
-        int non_empty_count = 0;
-        char line[1024];
-        while (fgets(line, sizeof(line), fp) != NULL) {
-            size_t len = strlen(line);
-            if (len > 0 && line[len-1] == '\n') line[len-1] = '\0';
-            char *line_copy = strdup(line);
-            if (!line_copy) die("Memory allocation failure");
-            if (num_lines >= capacity) {
-                capacity *= 2;
-                char **temp = realloc(lines, sizeof(char*) * capacity);
-                if (!temp) die("Memory allocation failure");
-                lines = temp;
-            }
-            lines[num_lines++] = line_copy;
-            for (size_t i = 0; i < strlen(line_copy); i++) {
-                if (!isspace((unsigned char)line_copy[i])) {
-                    non_empty_count++;
-                    break;
-                }
-            }
-        }
-        _pclose(fp);
-        if (non_empty_count == 1) {
-            for (int i = 0; i < num_lines; i++) {
-                int is_non_empty = 0;
-                for (size_t j = 0; j < strlen(lines[i]); j++) {
-                    if (!isspace((unsigned char)lines[i][j])) {
-                        is_non_empty = 1;
-                        break;
-                    }
-                }
-                if (is_non_empty) {
-                    strncpy(E.status_message, lines[i], sizeof(E.status_message) - 1);
-                    E.status_message[sizeof(E.status_message) - 1] = '\0';
-                    E.status_message_time = time(NULL);
-                    break;
-                }
-            }
-            for (int i = 0; i < num_lines; i++) free(lines[i]);
-            free(lines);
-        } else if (non_empty_count > 1) {
-            E.terminal_output_lines = lines;
-            E.terminal_output_num_lines = num_lines;
-            E.terminal_output_mode = 1;
-        } else {
-            editorSetStatusMessage("Command executed with no output");
-            for (int i = 0; i < num_lines; i++) free(lines[i]);
-            free(lines);
-        }
-    } else {
+    if (strncmp(E.terminal_input, "run ", 4) != 0) {
         editorSetStatusMessage("Unknown command");
+        goto reset;
     }
+    FILE *fp = _popen(E.terminal_input + 4, "r");
+    if (!fp) {
+        editorSetStatusMessage("Failed to execute command");
+        goto reset;
+    }
+    int capacity = 10, num_lines = 0, non_empty = 0;
+    char **lines = malloc(sizeof(char*) * capacity);
+    if (!lines) die("Memory allocation failure");
+    char *line = NULL;
+    size_t linecap = 0;
+    ssize_t len;
+    while ((len = win_getline(&line, &linecap, fp)) != -1) {
+        if (len > 0 && line[len-1] == '\n') line[len-1] = '\0';
+        char *line_copy = strdup(line);
+        if (!line_copy) die("Memory allocation failure");
+        if (num_lines >= capacity) {
+            capacity *= 2;
+            char **temp = realloc(lines, sizeof(char*) * capacity);
+            if (!temp) die("Memory allocation failure");
+            lines = temp;
+        }
+        lines[num_lines++] = line_copy;
+        if (strspn(line_copy, " \t\r\n") < strlen(line_copy)) non_empty++;
+    }
+    free(line);
+    _pclose(fp);
+    if (non_empty == 1) {
+        for (int i = 0; i < num_lines; i++) {
+            if (strspn(lines[i], " \t\r\n") < strlen(lines[i])) {
+                strncpy(E.status_message, lines[i], sizeof(E.status_message) - 1);
+                E.status_message[sizeof(E.status_message) - 1] = '\0';
+                E.status_message_time = time(NULL);
+                break;
+            }
+        }
+        for (int i = 0; i < num_lines; i++) free(lines[i]);
+        free(lines);
+    } else if (non_empty > 1) {
+        E.terminal_output_lines = lines;
+        E.terminal_output_num_lines = num_lines;
+        E.terminal_output_mode = 1;
+    } else {
+        editorSetStatusMessage("Command executed with no output");
+        for (int i = 0; i < num_lines; i++) free(lines[i]);
+        free(lines);
+    }
+reset:
     E.in_terminal_mode = 0;
     E.terminal_input[0] = '\0';
     E.terminal_input_len = 0;
@@ -945,6 +949,9 @@ void initEditor() {
     E.terminal_output_mode = 0;
     E.terminal_output_lines = NULL;
     E.terminal_output_num_lines = 0;
+    E.terminal_history = NULL;
+    E.terminal_history_num_lines = 0;
+    E.terminal_height = 5;
     if (getWindowSize(&E.screen_rows, &E.screen_columns) == -1) die("getWindowSize");
     E.screen_rows = (E.screen_rows > 2) ? (E.screen_rows - 2) : 0;
 }
